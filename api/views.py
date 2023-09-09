@@ -1,19 +1,35 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Customer, Product
-from .serializers import CustomerSerializer, ProductSerializer
+from .models import Users, Products
+from .serializers import UserSerializer, ProductSerializer, UserEditSerializer
+from . import custom_permissions
 
 
 class CustomerViewSet(viewsets.ModelViewSet):
-    queryset = Customer.objects.all()
-    serializer_class = CustomerSerializer
+    queryset = Users.objects.filter(deleted_at__isnull=True)
+    serializer_class = UserSerializer
+    permission_classes = [custom_permissions.IsSuperUser]
+    def get_serializer_class(self):
+        if self.request.method in ('PUT', 'PATCH'):
+            return UserEditSerializer
+        return UserSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        product = self.get_object()
+        product.deleted_at = timezone.now()
+        product.save()
+        return Response({'message': 'User deleted'}, status=status.HTTP_200_OK)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all()
+    queryset = Products.objects.filter(deleted_at__isnull=True)
     serializer_class = ProductSerializer
+    permission_classes = [permissions.IsAdminUser, permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(customer=self.request.user)
 
     @action(detail=True, methods=['put'])
     def toggle_status(self, request, pk=None):
@@ -33,7 +49,6 @@ class ProductViewSet(viewsets.ModelViewSet):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # Check if the product can be updated based on the active/inactive condition
         if not request.data.get('active') and (timezone.now() - instance.created_at).days < 60:
             return Response({'message': 'Product cannot be deactivated as it was registered within 2 months'}, status=status.HTTP_400_BAD_REQUEST)
         
